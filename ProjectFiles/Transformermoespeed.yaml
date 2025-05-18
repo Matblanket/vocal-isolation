@@ -1,0 +1,222 @@
+# ################################
+# Model: SepFormer for source separation
+# https://arxiv.org/abs/2010.13154
+# Dataset : Libri2mix
+# ################################
+#
+# Basic parameters
+# Seed needs to be set at top of yaml, before objects with parameters are made
+#
+seed: 1234
+__set_seed: !apply:speechbrain.utils.seed_everything [!ref <seed>]
+
+# Data params
+
+# e.g. '/yourpath/Libri2Mix/train-clean-360/'
+# the data folder is needed even if dynamic mixing is applied
+data_folder: /yourpath/Libri2Mix/train-clean-360/
+
+experiment_name: moespeedplus-former-libri2mix
+output_folder: !ref results/<experiment_name>/<seed>
+train_log: !ref <output_folder>/train_log.txt
+save_folder: !ref <output_folder>/save
+train_data: !ref <save_folder>/libri2mix_train-360.csv
+valid_data: !ref <save_folder>/libri2mix_dev.csv
+test_data: !ref <save_folder>/libri2mix_test.csv
+skip_prep: False
+
+ckpt_interval_minutes: 60
+
+# Experiment params
+precision: fp16 # bf16, fp16 or fp32 # Set it to True for mixed precision
+num_spks: 2
+noprogressbar: False
+save_audio: True # Save estimated sources on disk
+sample_rate: 16000
+
+####################### Training Parameters ####################################
+N_epochs: 100
+batch_size: 1
+lr: 0.00015
+clip_grad_norm: 5
+loss_upper_lim: 999999  # this is the upper limit for an acceptable loss
+# if True, the training sequences are cut to a specified length
+limit_training_signal_len: False
+# this is the length of sequences if we choose to limit
+# the signal length of training sequences
+training_signal_len: 57000
+audio_length: 6
+
+
+# Parameters for data augmentation
+use_wavedrop: True
+use_speedperturb: True
+use_rand_shift: True
+min_shift: -8000
+max_shift: 8000
+
+# Speed perturbation
+speed_changes: [95, 100, 105]  # List of speed changes for time-stretching
+
+speed_perturb: !new:speechbrain.augment.time_domain.SpeedPerturb
+    orig_freq: !ref <sample_rate>
+    speeds: !ref <speed_changes>
+
+# Frequency drop: randomly drops a number of frequency bands to zero.
+drop_freq_low: 0  # Min frequency band dropout probability
+drop_freq_high: 1  # Max frequency band dropout probability
+drop_freq_count_low: 1  # Min number of frequency bands to drop
+drop_freq_count_high: 3  # Max number of frequency bands to drop
+drop_freq_width: 0.05  # Width of frequency bands to drop
+
+drop_freq: !new:speechbrain.augment.time_domain.DropFreq
+    drop_freq_low: !ref <drop_freq_low>
+    drop_freq_high: !ref <drop_freq_high>
+    drop_freq_count_low: !ref <drop_freq_count_low>
+    drop_freq_count_high: !ref <drop_freq_count_high>
+    drop_freq_width: !ref <drop_freq_width>
+
+# Time drop: randomly drops a number of temporal chunks.
+drop_chunk_count_low: 1  # Min number of audio chunks to drop
+drop_chunk_count_high: 5  # Max number of audio chunks to drop
+drop_chunk_length_low: 1000  # Min length of audio chunks to drop
+drop_chunk_length_high: 2000  # Max length of audio chunks to drop
+
+drop_chunk: !new:speechbrain.augment.time_domain.DropChunk
+    drop_length_low: !ref <drop_chunk_length_low>
+    drop_length_high: !ref <drop_chunk_length_high>
+    drop_count_low: !ref <drop_chunk_count_low>
+    drop_count_high: !ref <drop_chunk_count_high>
+
+
+# loss thresholding -- this thresholds the training loss
+threshold_byloss: True
+threshold: -30
+
+# Encoder parameters
+N_encoder_out: 256
+out_channels: 256
+kernel_size: 16
+kernel_stride: 8
+d_ffn: 1024
+dropout: 0.5
+dnn_neurons: 64
+
+# Dataloader options
+dataloader_opts:
+    batch_size: !ref <batch_size>
+    num_workers: 8
+
+
+# Specifying the network
+Encoder: !new:speechbrain.lobes.models.dual_path.Encoder
+    kernel_size: !ref <kernel_size>
+    out_channels: !ref <N_encoder_out>
+
+
+SBtfintra: !new:speechbrain.lobes.models.dual_path.SBTransformerBlock
+    num_layers: 8
+    d_model: !ref <out_channels>
+    nhead: 8
+    d_ffn: !ref <d_ffn>
+    dropout: 0
+    use_positional_encoding: True
+    norm_before: True
+
+SBtfinter: !new:speechbrain.lobes.models.dual_path.SBTransformerBlock
+    num_layers: 8
+    d_model: !ref <out_channels>
+    nhead: 8
+    d_ffn: !ref <d_ffn>
+    dropout: 0
+    use_positional_encoding: True
+    norm_before: True
+
+MaskNet: !new:speechbrain.lobes.models.dual_path.Dual_Path_Model
+    num_spks: !ref <num_spks> * 10
+    in_channels: !ref <N_encoder_out>
+    out_channels: !ref <out_channels>
+    num_layers: 4
+    K: 250
+    intra_model: !ref <SBtfintra>
+    inter_model: !ref <SBtfinter>
+    norm: ln
+    linear_layer_after_inter_intra: False
+    skip_around_intra: True
+
+Decoder: !new:speechbrain.lobes.models.dual_path.Decoder
+    in_channels: !ref <N_encoder_out>
+    out_channels: 1
+    kernel_size: !ref <kernel_size>
+    stride: !ref <kernel_stride>
+    bias: False
+
+SPK_Scores1: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [1, 10, 256 ,11999] 
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: !ref <dnn_neurons>
+        bias: True
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: !ref <dropout>
+    flatten: !new:torch.nn.Flatten
+        start_dim: 1
+
+    linear_out: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 10
+        bias: True
+
+SPK_Scores2: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [1, 10, 256 ,11999] # Input shape: [Batch, Channel, Feature1, Feature2]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: !ref <dnn_neurons>
+        bias: True
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: !ref <dropout>
+
+    flatten: !new:torch.nn.Flatten
+        start_dim: 1
+
+    linear_out: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 10
+        bias: True
+    
+optimizer: !name:torch.optim.Adam
+    lr: !ref <lr>
+    weight_decay: 0
+
+loss: !name:speechbrain.nnet.losses.get_si_snr_with_pitwrapper
+
+lr_scheduler: !new:speechbrain.nnet.schedulers.ReduceLROnPlateau
+    factor: 0.5
+    patience: 2
+    dont_halve_until_epoch: 5
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <N_epochs>
+
+modules:
+    encoder: !ref <Encoder>
+    decoder: !ref <Decoder>
+    masknet: !ref <MaskNet>
+    spk_scores1: !ref <SPK_Scores1>
+    spk_scores2: !ref <SPK_Scores2>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        encoder: !ref <Encoder>
+        decoder: !ref <Decoder>
+        masknet: !ref <MaskNet>
+        spk_scores1: !ref <SPK_Scores1>
+        spk_scores2: !ref <SPK_Scores2>
+        counter: !ref <epoch_counter>
+        # lr_scheduler: !ref <lr_scheduler>
+
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
+
+error_stats: !name:speechbrain.utils.metric_stats.MetricStats
+    metric: !name:speechbrain.nnet.losses.classification_error
+        reduction: batch
