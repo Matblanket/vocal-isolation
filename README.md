@@ -4,15 +4,17 @@ This project focuses on isolating vocals from instrumental components in music u
 
 ## 📄 Project Report
 
-All details, including methodology, experiments, and results, are documented in the [report.ipynb](./report.ipynb) notebook.
+[Architecture Diagram](./architecture.png)
+
+This project fine-tunes and modifies the SepFormer architecture, incorporating a Mixture of Experts (MoE) esque improvement and evaluates model performance using SDR, SIR, and SAR metrics. Over the course of the project, several paths were threaded and all details, including methodology, experiments, and results, are documented in the [report.ipynb](./ConversationalAIProject.ipynb) notebook.
 
 ## 📁 Directory Structure
 
 ```
 .
-├── report.ipynb            # Main project report with code and explanations
-├── ProjectFiles/           # Contains all experiment code and configurations
-└── README.md               # This file
+├── ConversationalAIProject.ipynb            # Main project report with code and explanations
+├── ProjectFiles/                            # Contains all experiment code and configurations
+└── README.md                                # This file
 ```
 
 ## 📚 Background
